@@ -53,9 +53,7 @@ def parse_size(size_str: str) -> tuple[int, int]:
     return width, height
 
 
-def encode_image_base64_with_compression(
-    image: Image.Image, format: str = "png", output_compression: int = 100
-) -> str:
+def encode_image_base64_with_compression(image: Image.Image, format: str = "png", output_compression: int = 100) -> str:
     """Encode PIL Image to a base64 image string.
 
     Args:
