@@ -8,7 +8,8 @@ for text-to-image generation, with vllm-omni specific extensions.
 """
 
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
+from fastapi import Form
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -44,6 +45,15 @@ class ImageGenerationRequest(BaseModel):
         description="Image dimensions in WIDTHxHEIGHT format (e.g., '1024x1024', uses model defaults if omitted)",
     )
     response_format: ResponseFormat = Field(default=ResponseFormat.B64_JSON, description="Format of the returned image")
+    output_format: str | None = Field(
+        default=None,
+        description="The image output format, availables: png, jpeg, webp",
+    )
+    background: str | None = Form("auto")
+    output_compression: Annotated[int, Form(ge=0, le=100)] = Field(
+        default=None,
+        description="Number of output layers for layered image models. Supported range: 3-10.",
+    )
     user: str | None = Field(default=None, description="User identifier for tracking")
     layers: int | None = Field(
         default=None,

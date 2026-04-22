@@ -84,7 +84,12 @@ from vllm.utils.collection_utils import as_list
 from vllm.v1.engine.exceptions import EngineDeadError
 
 from vllm_omni.entrypoints.openai.audio_utils_mixin import AudioMixin
-from vllm_omni.entrypoints.openai.image_api_utils import validate_layered_layers
+from vllm_omni.entrypoints.openai.image_api_utils import (
+    choose_output_format,
+    encode_image_base64_with_compression,
+    get_vllm_image_params,
+    validate_layered_layers
+)
 from vllm_omni.entrypoints.openai.protocol import OmniChatCompletionStreamResponse
 from vllm_omni.entrypoints.openai.protocol.audio import AudioResponse, CreateAudio
 from vllm_omni.entrypoints.openai.utils import (
@@ -2056,17 +2061,16 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 images = final_res.images
 
         # Convert images to base64
+        fmt, compression, background = get_vllm_image_params(request.vllm_xargs)
+        fmt = choose_output_format(fmt, background)
         image_contents = []
         for img in images:
-            with BytesIO() as buffer:
-                img.save(buffer, format="PNG")
-                img_bytes = buffer.getvalue()
-            img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+            img_base64 = encode_image_base64_with_compression(img, fmt, compression)
             image_contents.append(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
+                        "url": f"data:image/{fmt};base64,{img_base64}",
                     },
                     "stage_durations": stage_durations,
                     "peak_memory_mb": peak_memory_mb,
@@ -2562,15 +2566,15 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 else:
                     flat_images.append(item)
 
+            fmt, compression, background = get_vllm_image_params(request.vllm_xargs)
+            fmt = choose_output_format(fmt, background)
             for img in flat_images:
-                with BytesIO() as buffer:
-                    img.save(buffer, format="PNG")
-                    img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                img_base64 = encode_image_base64_with_compression(img, fmt, compression)
                 image_contents.append(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{img_base64}",
+                            "url": f"data:image/{fmt};base64,{img_base64}",
                         },
                         "stage_durations": stage_durations,
                         "peak_memory_mb": peak_memory_mb,

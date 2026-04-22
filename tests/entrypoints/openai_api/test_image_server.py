@@ -19,7 +19,7 @@ from pytest_mock import MockerFixture
 from vllm import SamplingParams
 
 from vllm_omni.entrypoints.openai.image_api_utils import (
-    encode_image_base64,
+    encode_image_base64_with_compression,
     parse_size,
 )
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
@@ -83,11 +83,11 @@ def test_parse_size_edge_cases():
         parse_size("1024 1024")
 
 
-def test_encode_image_base64():
+def test_encode_image_base64_with_compression():
     """Test image encoding to base64"""
     # Create a simple test image
     img = Image.new("RGB", (64, 64), color="red")
-    b64_str = encode_image_base64(img)
+    b64_str = encode_image_base64_with_compression(img)
 
     # Should be valid base64
     assert isinstance(b64_str, str)

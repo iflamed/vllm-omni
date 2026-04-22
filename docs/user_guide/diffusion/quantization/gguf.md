@@ -82,7 +82,7 @@ StageDiffusionClient
 OmniRequestOutput
   |
   v
-encode_image_base64
+encode_image_base64_with_compression
   |
   v
 ImageGenerationResponse

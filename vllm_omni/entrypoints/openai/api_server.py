@@ -92,7 +92,8 @@ from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
 from vllm_omni.entrypoints.openai.image_api_utils import (
     SUPPORTED_LAYERED_RESOLUTIONS,
-    encode_image_base64,
+    choose_output_format,
+    encode_image_base64_with_compression,
     parse_size,
     validate_layered_layers,
 )
@@ -1385,6 +1386,16 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
     try:
         # Unify request construction for any multi-stage pipeline to avoid
         # divergence between /v1/images and /v1/chat/completions.
+        output_format = "png"
+        output_compression = 100
+        background = "auto"
+        if request.output_format is not None:
+            output_format = request.output_format
+        if request.output_compression is not None:
+            output_compression = request.output_compression
+        if request.background is not None:
+            background = request.background
+        output_format = choose_output_format(output_format, background)
         if len(stage_configs) > 1:
             chat_handler = getattr(raw_request.app.state, "openai_serving_chat", None)
             if chat_handler is None:
@@ -1400,7 +1411,6 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                 "num_outputs_per_prompt": request.n,
             }
             if request.size is not None:
-                parse_size(request.size)
                 width, height = parse_size(request.size)
                 app_state_args = getattr(raw_request.app.state, "args", None)
                 _check_max_generated_image_size(app_state_args, width, height)
@@ -1431,7 +1441,17 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                     content=generation_result.model_dump(),
                 )
             flat_images, _, _ = generation_result
-            image_data = [ImageData(b64_json=encode_image_base64(img), revised_prompt=None) for img in flat_images]
+            image_data = [
+                ImageData(
+                    b64_json=encode_image_base64_with_compression(
+                        img,
+                        format=output_format,
+                        output_compression=output_compression,
+                    ),
+                    revised_prompt=None,
+                )
+                for img in flat_images
+            ]
             return ImageGenerationResponse(created=int(time.time()), data=image_data)
 
         # Build params - pass through user values directly
@@ -1515,7 +1535,17 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
         logger.info(f"Successfully generated {len(images)} image(s)")
 
         # Encode images to base64
-        image_data = [ImageData(b64_json=encode_image_base64(img), revised_prompt=None) for img in images]
+        image_data = [
+            ImageData(
+                b64_json=encode_image_base64_with_compression(
+                    img,
+                    format=output_format,
+                    output_compression=output_compression,
+                ),
+                revised_prompt=None,
+            )
+            for img in images
+        ]
 
         return ImageGenerationResponse(
             created=int(time.time()),
@@ -1588,7 +1618,7 @@ async def edit_images(
             detail=(f"Model mismatch: request specifies '{model}' but server is running '{model_name}'."),
         )
     # 2. get output format & compression
-    output_format = _choose_output_format(output_format, background)
+    output_format = choose_output_format(output_format, background)
     if response_format != "b64_json":
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST.value,
@@ -1744,7 +1774,7 @@ async def edit_images(
         # Encode images to base64
         image_data = [
             ImageData(
-                b64_json=_encode_image_base64_with_compression(
+                b64_json=encode_image_base64_with_compression(
                     img, format=output_format, output_compression=output_compression
                 ),
                 revised_prompt=None,
@@ -2062,61 +2092,6 @@ async def _load_input_images(
         raise ValueError("No valid input images found")
 
     return images
-
-
-def _choose_output_format(output_format: str | None, background: str | None) -> str:
-    # Normalize and choose extension
-    fmt = (output_format or "").lower()
-    if fmt in {"jpg", "png", "webp", "jpeg"}:
-        return fmt
-    # If transparency requested, prefer png
-    if (background or "auto").lower() == "transparent":
-        return "png"
-    # Default
-    return "jpeg"
-
-
-def _prepare_image_for_output_format(image: Image.Image, format: str) -> Image.Image:
-    fmt = format.lower()
-    if fmt not in {"jpg", "jpeg"}:
-        return image
-
-    if image.mode == "RGB":
-        return image
-
-    if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
-        alpha_image = image.convert("RGBA")
-        flattened = Image.new("RGB", alpha_image.size, (255, 255, 255))
-        flattened.paste(alpha_image, mask=alpha_image.getchannel("A"))
-        return flattened
-
-    return image.convert("RGB")
-
-
-def _encode_image_base64_with_compression(
-    image: Image.Image, format: str = "png", output_compression: int = 100
-) -> str:
-    """Encode PIL Image to a base64 image string.
-
-    Args:
-        image: PIL Image object
-        format: Output image format (e.g., "PNG", "JPEG", "WEBP")
-        output_compression: Compression level (0-100%), 100 for best quality
-    Returns:
-        Base64-encoded image as string
-    """
-    buffer = io.BytesIO()
-    image = _prepare_image_for_output_format(image, format)
-    save_kwargs = {}
-    if format in ("jpg", "jpeg", "webp"):
-        save_kwargs["quality"] = output_compression
-    elif format == "png":
-        save_kwargs["compress_level"] = max(0, min(9, 9 - output_compression // 11))  # Map 0-100 to 9-0
-
-    image.save(buffer, format=format, **save_kwargs)
-    buffer.seek(0)
-    return base64.b64encode(buffer.read()).decode("utf-8")
-
 
 def apply_stage_default_sampling_params(
     default_params_json: str | None,
