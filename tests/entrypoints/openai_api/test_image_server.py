@@ -23,7 +23,6 @@ from vllm.entrypoints.openai.models.protocol import BaseModelPath
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.api_server import _DiffusionServingModels, router
 from vllm_omni.entrypoints.openai.image_api_utils import (
-    SUPPORTED_OUTPUT_FORMATS,
     choose_output_format,
     encode_image_base64,
     get_vllm_image_params,

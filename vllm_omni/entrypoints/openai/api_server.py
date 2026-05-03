@@ -1945,9 +1945,7 @@ async def edit_images(
         # Encode images to base64
         image_data = [
             ImageData(
-                b64_json=encode_image_base64(
-                    img, format=output_format, output_compression=output_compression
-                ),
+                b64_json=encode_image_base64(img, format=output_format, output_compression=output_compression),
                 revised_prompt=None,
             )
             for img in images
