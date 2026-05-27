@@ -89,7 +89,6 @@ from vllm_omni.entrypoints.openai.audio_utils_mixin import AudioMixin
 from vllm_omni.entrypoints.openai.image_api_utils import (
     choose_output_format,
     encode_image_base64,
-    encode_image_base64_with_compression,
     get_vllm_image_params,
     validate_layered_layers,
 )
@@ -2652,7 +2651,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                         raise RuntimeError("Streaming image edit produced an empty final image output.")
                     image_data = [
                         ImageData(
-                            b64_json=encode_image_base64_with_compression(
+                            b64_json=encode_image_base64(
                                 img,
                                 format=output_format,
                                 output_compression=output_compression,
@@ -3009,20 +3008,20 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                     else:
                         flat_images.append(item)
 
-            for img in flat_images:
-                with BytesIO() as buffer:
-                    img.save(buffer, format="PNG")
-                    img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-                image_contents.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{img_base64}",
-                        },
-                        "stage_durations": stage_durations,
-                        "peak_memory_mb": peak_memory_mb,
-                    }
-                )
+                for img in flat_images:
+                    with BytesIO() as buffer:
+                        img.save(buffer, format="PNG")
+                        img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                    image_contents.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_base64}",
+                            },
+                            "stage_durations": stage_durations,
+                            "peak_memory_mb": peak_memory_mb,
+                        }
+                    )
 
                 # Build response
                 if not image_contents:

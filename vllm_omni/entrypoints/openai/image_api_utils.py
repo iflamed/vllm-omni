@@ -85,6 +85,7 @@ def encode_image_base64(image: Image.Image, format: str = "png", output_compress
     buffer.seek(0)
     return base64.b64encode(buffer.read()).decode("utf-8")
 
+
 def choose_output_format(output_format: str | None, background: str | None) -> str:
     """Resolve a final image format from the request's output_format / background.
 
@@ -146,33 +147,6 @@ def prepare_image_for_output_format(image: Image.Image, format: str) -> Image.Im
         return flattened
 
     return image.convert("RGB")
-
-
-def encode_image_base64_with_compression(
-    image: Image.Image, format: str = "png", output_compression: int = 100
-) -> str:
-    """Encode a PIL image to a base64 image string.
-
-    Args:
-        image: PIL Image object.
-        format: Output image format, such as "png", "jpeg", or "webp".
-        output_compression: Compression level (0-100), where 100 keeps the
-            best quality for lossy formats and uses the lowest PNG compression.
-
-    Returns:
-        Base64-encoded image string.
-    """
-    buffer = io.BytesIO()
-    image = prepare_image_for_output_format(image, format)
-    save_kwargs = {}
-    if format in ("jpg", "jpeg", "webp"):
-        save_kwargs["quality"] = output_compression
-    elif format == "png":
-        save_kwargs["compress_level"] = max(0, min(9, 9 - output_compression // 11))
-
-    image.save(buffer, format=format, **save_kwargs)
-    buffer.seek(0)
-    return base64.b64encode(buffer.read()).decode("utf-8")
 
 
 def validate_layered_layers(layers: int | None) -> int | None:

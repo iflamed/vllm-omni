@@ -93,7 +93,6 @@ from vllm_omni.entrypoints.openai.image_api_utils import (
     SUPPORTED_LAYERED_RESOLUTIONS,
     choose_output_format,
     encode_image_base64,
-    encode_image_base64_with_compression,
     parse_size,
     validate_layered_layers,
 )
@@ -1654,7 +1653,10 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
 
         # Encode images to base64
         image_data = [
-            ImageData(b64_json=encode_image_base64_with_compression(img, format=output_format), revised_prompt=None)
+            ImageData(
+                b64_json=encode_image_base64(img, format=output_format, output_compression=output_compression),
+                revised_prompt=None,
+            )
             for img in images
         ]
 
@@ -1990,9 +1992,7 @@ async def edit_images(
         # Encode images to base64
         image_data = [
             ImageData(
-                b64_json=encode_image_base64_with_compression(
-                    img, format=output_format, output_compression=output_compression
-                ),
+                b64_json=encode_image_base64(img, format=output_format, output_compression=output_compression),
                 revised_prompt=None,
             )
             for img in images
@@ -2301,18 +2301,6 @@ async def _load_input_images(
     # sees the request -- root cause of the "online 3 magnets vs offline 1
     # magnet" systematic semantic mismatch.
     return [img.convert("RGB") for img in images]
-
-
-def _choose_output_format(output_format: str | None, background: str | None) -> str:
-    # Normalize and choose extension
-    fmt = (output_format or "").lower()
-    if fmt in {"jpg", "png", "webp", "jpeg"}:
-        return fmt
-    # If transparency requested, prefer png
-    if (background or "auto").lower() == "transparent":
-        return "png"
-    # Default
-    return "jpeg"
 
 
 def apply_stage_default_sampling_params(
