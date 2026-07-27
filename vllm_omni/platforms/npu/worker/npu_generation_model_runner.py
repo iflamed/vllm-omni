@@ -35,10 +35,31 @@ from vllm_ascend.worker.model_runner_v1 import SEQ_LEN_WITH_MAX_PA_WORKSPACE
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.platforms.npu.worker.npu_ar_model_runner import ExecuteModelState, _ensure_tensor_values
 from vllm_omni.platforms.npu.worker.npu_model_runner import OmniNPUModelRunner
+from vllm_omni.utils.mm_outputs import partition_payload_list
+from vllm_omni.worker.omni_connector_model_runner_mixin import OmniConnectorModelRunnerMixin
 
 
-class NPUGenerationModelRunner(OmniNPUModelRunner):
+class NPUGenerationModelRunner(OmniNPUModelRunner, OmniConnectorModelRunnerMixin):
     """Generation model runner for vLLM-omni on NPU (non-autoregressive)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._async_chunk = getattr(self.model_config, "async_chunk", False)
+        _OMNI_CONNECTOR_INIT_ARCHS = {
+            "Qwen3OmniMoeForConditionalGeneration",
+            "Qwen2_5OmniForConditionalGeneration",
+            "CovoAudioForConditionalGeneration",
+            "MiMoAudioModel",
+            "Qwen3TTSTalkerForConditionalGeneration",
+            "Qwen3TTSCode2Wav",
+            "CosyVoice3Model",
+            "DyninOmniForConditionalGeneration",
+            "IndexTTS2S2MelDecoder",
+        }
+        if getattr(self.model_config, "model_arch", None) in _OMNI_CONNECTOR_INIT_ARCHS:
+            self.init_omni_connectors(
+                model_config=self.model_config,
+            )
 
     def _update_request_states(self, scheduler_output: SchedulerOutput):
         # remove requests
@@ -108,6 +129,16 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
             if kv_connector_metadata is not None:
                 get_kv_transfer_group().handle_preemptions(kv_connector_metadata)
 
+        if hasattr(self, "_omni_connector"):
+            for request in getattr(scheduler_output, "pending_input_registrations", []):
+                self.register_chunk_recv(request)
+            self.recv_full_payload_inputs(scheduler_output)
+            if self._pending_full_payload_send:
+                flush_ids = set(getattr(scheduler_output, "finished_req_ids", set()))
+                flush_ids.update({rid for rid in self._pending_full_payload_send if rid not in self.requests})
+                if flush_ids:
+                    self.flush_full_payload_outputs(flush_ids)
+
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         with record_function_or_nullcontext("prepare input"):
             #  -------------------------------------- Omni-new -------------------------------------------------
@@ -124,9 +155,12 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                         encoder_cache=self.encoder_cache,
                     ) as ec_connector_output:
                         self._execute_mm_encoder(scheduler_output)
-                        return make_empty_encoder_model_runner_output(scheduler_output)
+                        return self.attach_omni_connector_output(
+                            make_empty_encoder_model_runner_output(scheduler_output)
+                        )
 
-                if not num_scheduled_tokens:
+                # `<= 0`: upstream can schedule a negative span, which is truthy (#5196).
+                if num_scheduled_tokens <= 0:
                     if (
                         self.parallel_config.distributed_executor_backend == "external_launcher"
                         and self.parallel_config.data_parallel_size > 1
@@ -140,8 +174,10 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                         self._dummy_run(1)
                     if not has_kv_transfer_group():
                         # Return empty ModelRunnerOutput if no work to do.
-                        return EMPTY_MODEL_RUNNER_OUTPUT
-                    return self.kv_connector_no_forward(scheduler_output, self.vllm_config)
+                        return self.attach_omni_connector_output(EMPTY_MODEL_RUNNER_OUTPUT)
+                    return self.attach_omni_connector_output(
+                        self.kv_connector_no_forward(scheduler_output, self.vllm_config)
+                    )
                 if self.cache_config.kv_sharing_fast_prefill:
                     assert not self.num_prompt_logprobs, (
                         "--kv-sharing-fast-prefill produces incorrect "
@@ -159,7 +195,6 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                     logits_indices,
                     spec_decode_metadata,
                     total_num_scheduled_tokens,
-                    num_scheduled_tokens_compressed_list,
                 ) = self._prepare_inputs(
                     scheduler_output,
                     num_scheduled_tokens_np,
@@ -256,7 +291,12 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                     # Another possible condition is num_tokens_padded != num_tokens_unpadded
                     # but this scope is way too big and the consequences are unpredictable
                     num_reqs_padded = self._pad_query_start_loc_for_fia(
-                        num_tokens_padded, num_reqs_padded, num_reqs, cudagraph_mode, batch_desc.num_reqs
+                        self.query_start_loc,
+                        num_tokens_padded,
+                        num_reqs_padded,
+                        num_reqs,
+                        cudagraph_mode,
+                        batch_desc.num_reqs,
                     )
 
                 (attn_metadata, spec_decode_common_attn_metadata) = self._build_attention_metadata(
@@ -407,11 +447,11 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
             # In case of PP with kv transfer, we need to pass through the
             # kv_connector_output
             if kv_connector_output.is_empty():
-                return EMPTY_MODEL_RUNNER_OUTPUT
+                return self.attach_omni_connector_output(EMPTY_MODEL_RUNNER_OUTPUT)
 
             output = copy(EMPTY_MODEL_RUNNER_OUTPUT)
             output.kv_connector_output = kv_connector_output
-            return output
+            return self.attach_omni_connector_output(output)
 
         # Unpack ephemeral state.
         (
@@ -435,20 +475,20 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
         #  -------------------------------------- Omni-new -------------------------------------------------
         # Build per-request multimodal_outputs list (dedicated channel).
         # pooler_output is no longer used for multimodal data.
-        multimodal_outputs: list[dict[str, object]] = []
+        per_req_payloads: list[dict[str, object]] = []
         if isinstance(multimodal_outputs_raw, torch.Tensor):
             assert multimodal_outputs_raw.shape[0] == 1, (
                 "model should return a single tensor, to return multiple tensors, use a dict"
             )
             assert multimodal_outputs_raw.shape[0] == self.input_batch.num_reqs
             for i in range(self.input_batch.num_reqs):
-                multimodal_outputs.append({"model_outputs": multimodal_outputs_raw[i].detach().to("cpu").contiguous()})
+                per_req_payloads.append({"model_outputs": multimodal_outputs_raw[i].detach().to("cpu").contiguous()})
         elif isinstance(multimodal_outputs_raw, list):
             assert len(multimodal_outputs_raw) == 1, (
                 "model should return a single list, to return multiple lists, use a dict"
             )
             for out in multimodal_outputs_raw:
-                multimodal_outputs.append(
+                per_req_payloads.append(
                     {"model_outputs": out.detach().to("cpu").contiguous() if out is not None else None}
                 )
         elif isinstance(multimodal_outputs_raw, Mapping):
@@ -467,12 +507,25 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                         mm_payload[key] = out.detach().to("cpu").contiguous()
                     else:
                         logger.warning(f"Unsupported multimodal output type for key '{key}': {type(out)}")
-                multimodal_outputs.append(_ensure_tensor_values(mm_payload))
+                per_req_payloads.append(_ensure_tensor_values(mm_payload))
         else:
             raise RuntimeError("Unsupported diffusion output type")
+
+        if self._async_chunk:
+            inter_stage_outputs, multimodal_outputs = partition_payload_list(per_req_payloads)
+        else:
+            # See npu_ar_model_runner: non-async-chunk ships the full payload to the next
+            # stage; #4527's (None, per_req_payloads) starved the downstream stage. (PR #4792)
+            inter_stage_outputs, multimodal_outputs = per_req_payloads, per_req_payloads
         # [Omni] Copy req_id mappings to avoid async scheduling mutation.
         req_ids_output_copy = self.input_batch.req_ids.copy()
         req_id_to_index_output_copy = self.input_batch.req_id_to_index.copy()
+        # [Omni] Full-payload send-side accumulation. Mirrors gpu_generation_model_runner.py.
+        if inter_stage_outputs and self._should_accumulate_full_payload_output():
+            for i, rid in enumerate(req_ids_output_copy):
+                req_state = self.requests.get(rid)
+                if req_state is not None and inter_stage_outputs[i]:
+                    self.accumulate_full_payload_output(rid, inter_stage_outputs[i], req_state)
         routed_experts_lists = None
         if self.vllm_config.model_config.enable_return_routed_experts and hasattr(
             self.input_batch, "num_tokens_no_spec"
@@ -486,12 +539,14 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
             prompt_logprobs_dict={},
             pooler_output=None,
             multimodal_outputs=multimodal_outputs,
+            inter_stage_outputs=inter_stage_outputs,
             kv_connector_output=kv_connector_output,
             num_nans_in_logits={},
             cudagraph_stats=cudagraph_stats,
             ec_connector_output=ec_connector_output if self.supports_mm_inputs else None,
         )
         output.routed_experts = routed_experts_lists
+        output.omni_connector_output = self.get_omni_connector_output()
         #  -------------------------------------- Omni-new -------------------------------------------------
 
         if self.speculative_config is not None:
@@ -716,7 +771,12 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
 
             if not profile_cpp:
                 num_reqs_padded = self._pad_query_start_loc_for_fia(
-                    num_tokens_padded, num_reqs_padded, num_reqs, cudagraph_runtime_mode, batch_desc.num_reqs
+                    self.query_start_loc,
+                    num_tokens_padded,
+                    num_reqs_padded,
+                    num_reqs,
+                    cudagraph_runtime_mode,
+                    batch_desc.num_reqs,
                 )
 
             pad_attn = cudagraph_runtime_mode == CUDAGraphMode.FULL
@@ -742,7 +802,15 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
         ):
             # Make sure padding doesn't exceed max_num_tokens
             assert num_tokens_padded <= self.max_num_tokens
-            if self.supports_mm_inputs and not self.model_config.is_encoder_decoder or self.enable_prompt_embeds:
+            model_kwargs = self._init_model_kwargs()
+            if self.supports_mm_inputs and not self.model_config.is_encoder_decoder:
+                input_ids, inputs_embeds = self._prepare_mm_inputs(num_tokens_padded)
+
+                model_kwargs = {
+                    **model_kwargs,
+                    **self._dummy_mm_kwargs(num_reqs),
+                }
+            elif self.enable_prompt_embeds:
                 input_ids = None
                 inputs_embeds = self.inputs_embeds.gpu[:num_tokens_padded]
             else:
@@ -750,7 +818,6 @@ class NPUGenerationModelRunner(OmniNPUModelRunner):
                 inputs_embeds = None
 
             # -------------------------------------- Omni-new -------------------------------------------------
-            model_kwargs = self._init_model_kwargs()
             # Some generation-stage models (e.g. MammothModa2DiTPipeline) require
             # model-specific runtime information (such as image size and conditioning
             # embeddings) even during the dummy profiling run that vLLM uses to

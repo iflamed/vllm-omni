@@ -99,6 +99,16 @@ _OMNI_MODELS = {
         "mammoth_moda2",
         "MammothModa2ARForConditionalGeneration",
     ),
+    "MammothModa2Qwen3ARForConditionalGeneration": (
+        "mammoth_moda2",
+        "mammoth_moda2",
+        "MammothModa2Qwen3ARForConditionalGeneration",
+    ),
+    "MammothModa2Qwen3ForCausalLM": (
+        "mammoth_moda2",
+        "mammoth_moda2",
+        "MammothModa2Qwen3ForCausalLM",
+    ),
     "MammothModa2DiTPipeline": (
         "mammoth_moda2",
         "pipeline_mammothmoda2_dit",
@@ -294,6 +304,12 @@ _OMNI_MODELS = {
         "modeling_moss_tts_talker",
         "MossTTSRealtimeTalkerForGeneration",
     ),
+    # MossTTSLocalModel: MOSS-TTS-Local-Transformer-v1.5
+    "MossTTSLocalModel": (
+        "moss_tts",
+        "modeling_moss_tts_talker",
+        "MossTTSLocalTalkerForGeneration",
+    ),
     # Stage-1 codec decoder (shared by all 5 variants)
     "MossTTSCodecDecoder": (
         "moss_tts",
@@ -304,6 +320,17 @@ _OMNI_MODELS = {
         "dynin_omni",
         "dynin_omni",
         "DyninOmniForConditionalGeneration",
+    ),
+    ## IndexTTS2
+    "IndexTTS2TalkerForConditionalGeneration": (
+        "indextts2",
+        "indextts2_talker",
+        "IndexTTS2TalkerForConditionalGeneration",
+    ),
+    "IndexTTS2S2MelDecoder": (
+        "indextts2",
+        "indextts2_s2mel_decoder",
+        "IndexTTS2S2MelDecoder",
     ),
     ## Ming-flash-omni-2.0
     "MingFlashOmniForConditionalGeneration": (
@@ -342,6 +369,16 @@ _OMNI_MODELS = {
         "minicpmo_4_5",
         "minicpmo_4_5_omni_tts",
         "MiniCPMO45OmniTTSForConditionalGeneration",
+    ),
+    "MiniCPMO45Code2Wav": (
+        "minicpmo_4_5",
+        "minicpmo_4_5_code2wav",
+        "MiniCPMO45Code2Wav",
+    ),
+    "AuraQwen3VLForConditionalGeneration": (
+        "aura_omni",
+        "qwen3_vl",
+        "AuraQwen3VLForConditionalGeneration",
     ),
 }
 

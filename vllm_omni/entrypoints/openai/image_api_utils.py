@@ -14,7 +14,7 @@ import io
 from PIL import Image
 
 SUPPORTED_LAYERED_RESOLUTIONS = (640, 1024)
-SUPPORTED_LAYERED_LAYERS_RANGE = range(3, 11)
+SUPPORTED_LAYERED_LAYERS_RANGE = range(2, 11)
 SUPPORTED_OUTPUT_FORMATS = frozenset({"png", "jpeg", "jpg", "webp"})
 
 
